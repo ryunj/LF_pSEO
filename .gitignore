@@ -1,0 +1,11 @@
+# 실적·대장 데이터는 공개 저장소에 커밋하지 않는다
+data.js
+mapping_seed.tsv
+*.xlsx
+*.xls
+*.csv
+*.tsv
+raw/
+backup/
+__pycache__/
+.DS_Store
