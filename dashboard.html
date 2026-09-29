@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>pSEO 실적 대시보드</title>
+<script src="vendor/xlsx.full.min.js"></script>
 <style>
 :root{
   color-scheme:light;
@@ -165,7 +166,7 @@ code{font-family:ui-monospace,Consolas,monospace;font-size:11.5px;color:var(--mu
       </nav>
       <div class="bk-tools">
         <button class="btn" type="button" id="btnLoad" title="PV·UV 실적 / 콘텐츠 대장 / AF코드 매핑 파일 올리기">데이터 갱신</button>
-        <input type="file" id="fileLoad" accept=".csv,.tsv,.txt" multiple hidden>
+        <input type="file" id="fileLoad" accept=".csv,.tsv,.txt,.xlsx,.xlsm,.xls" multiple hidden>
         <button class="btn" type="button" id="btnXls">엑셀</button>
       </div>
     </div>
@@ -227,9 +228,9 @@ code{font-family:ui-monospace,Consolas,monospace;font-size:11.5px;color:var(--mu
     <div style="font-size:13px;color:var(--ink-2);line-height:1.8">
       이 저장소에는 실적·대장 데이터를 두지 않습니다. 아래 파일을 <b>이 화면에 끌어다 놓거나</b> 위 <b>데이터 갱신</b> 버튼으로 고르면 바로 그려집니다.<br>
       1. <b>PV·UV 크로스탭</b> — 행 = PV/UV × AF코드, 열 = 유입 연월일(YYYYMMDD). 태블로에서 받은 UTF-16 CSV 그대로 가능<br>
-      2. <b>콘텐츠 대장</b> — <code>차수 · 키워드 · AF코드 · slug · 현재 운영중 · 업데이트 날짜 · 최신 반영 · 미반영 분류 · 미반영 사유</code> 열이 있는 CSV<br>
-      3. <b>AF코드 시트</b> — <code>매체코드 · 매체코드명(NBOS등록)</code> 열이 있는 PSEO 탭 CSV. NBOS 등록명도 AF코드로 매칭합니다.<br>
-      <span class="hint">xlsx 는 브라우저에서 못 읽습니다 — CSV 로 저장해 올리거나 <code>python3 build_data.py &lt;실적CSV&gt; &lt;대장XLSX&gt; --af-map &lt;AF코드시트XLSX&gt;</code> 로 data.js 를 만드세요.</span>
+      2. <b>콘텐츠 대장</b> — <code>차수 · 키워드 · AF코드 · slug · 현재 운영중 · 업데이트 날짜 · 최신 반영 · 미반영 분류 · 미반영 사유</code> 열이 있는 CSV 또는 Excel<br>
+      3. <b>AF코드 시트</b> — <code>매체코드 · 매체코드명(NBOS등록)</code> 열이 있는 PSEO 탭 CSV 또는 Excel. NBOS 등록명도 AF코드로 매칭합니다.<br>
+      <span class="hint">CSV와 xlsx/xlsm/xls를 바로 올릴 수 있습니다. 대장·AF코드 파일만 갱신할 때는 실적 날짜 열이 없어도 됩니다.</span>
     </div>
   </div>
 
@@ -860,12 +861,34 @@ async function readFile(file){
   if(u8[0]===0xFF&&u8[1]===0xFE)return new TextDecoder('utf-16le').decode(buf);
   return new TextDecoder('utf-8').decode(buf);
 }
+async function readUploadSheets(file){
+  const excel=/\.(xlsx|xlsm|xls)$/i.test(file.name);
+  if(!excel)return [{sheet:'',rows:parseCSV(await readFile(file))}];
+  if(typeof XLSX==='undefined')throw new Error('대시보드에 포함된 엑셀 읽기 모듈을 불러오지 못했습니다. 파일을 다시 내려받아 주세요.');
+  const book=XLSX.read(await file.arrayBuffer(),{type:'array',cellDates:false});
+  return book.SheetNames.map(sheet=>({
+    sheet,
+    rows:XLSX.utils.sheet_to_json(book.Sheets[sheet],{header:1,raw:false,defval:''})
+  })).filter(x=>x.rows.length);
+}
 function findHeader(rows,names){
   for(let hi=0;hi<Math.min(rows.length,12);hi++){
     const H=rows[hi].map(x=>String(x||'').trim());
     if(names.every(n=>H.includes(n)))return {hi,H};
   }
   return null;
+}
+function detectUploadKind(rows){
+  if(findHeader(rows,['AF코드','키워드']))return 'led';
+  if(findHeader(rows,['매체코드']))return 'map';
+  const hasDate=rows.slice(0,12).some(r=>r.some(c=>/^\d{8}$/.test(String(c||'').trim())));
+  return hasDate?'perf':'';
+}
+function sheetPriority(kind,name){
+  name=String(name||'').trim();
+  if(kind==='map'&&name==='PSEO')return 100;
+  if(kind==='led'&&name.includes('전체대장'))return 100;
+  return name?10:0;
 }
 function cleanMediaName(name){
   return String(name||'').trim().replace(/^\d+_(?:brand|cat)_/i,'').replace(/\s*추천\s*$/,'').trim();
@@ -923,13 +946,30 @@ async function restoreLastBackup(){
   prep();syncSelectors();srcNote();draw();
 }
 async function loadFiles(files){
+  const unknown=[];
+  let recognized=0;
   for(const f of files){
-    const txt=await readFile(f),rows=parseCSV(txt);
-    const head=rows.slice(0,6).flat().join('|');
-    if(head.includes('AF코드')&&head.includes('키워드')){FILE_INPUT.led=rows;FILE_INPUT.ledName=f.name;}
-    else if(head.includes('매체코드')){FILE_INPUT.map=rows;FILE_INPUT.mapName=f.name;}
-    else{FILE_INPUT.perf=rows;FILE_INPUT.perfName=f.name;}
+    let sheets;
+    try{sheets=await readUploadSheets(f);}
+    catch(err){alert(err.message||('파일을 읽지 못했습니다: '+f.name));return;}
+    const selected={};
+    for(const item of sheets){
+      const rows=item.rows;
+      const kind=detectUploadKind(rows);
+      const sourceName=f.name+(item.sheet?' ['+item.sheet+']':'');
+      if(!kind){unknown.push(sourceName);continue;}
+      const priority=sheetPriority(kind,item.sheet);
+      if(!selected[kind]||priority>selected[kind].priority)selected[kind]={rows,sourceName,priority};
+    }
+    Object.entries(selected).forEach(([kind,item])=>{
+      recognized++;
+      if(kind==='led'){FILE_INPUT.led=item.rows;FILE_INPUT.ledName=item.sourceName;}
+      else if(kind==='map'){FILE_INPUT.map=item.rows;FILE_INPUT.mapName=item.sourceName;}
+      else if(kind==='perf'){FILE_INPUT.perf=item.rows;FILE_INPUT.perfName=item.sourceName;}
+    });
   }
+  if(!recognized){alert('업데이트할 수 있는 시트를 찾지 못했습니다. AF코드·키워드, 매체코드, 또는 YYYYMMDD 열을 확인해 주세요.');return;}
+  if(unknown.length)console.info('지원 열이 없어 건너뛴 시트:',unknown);
   const {perf,map,led,perfName,mapName,ledName}=FILE_INPUT;
   const codes=FILE_INPUT.baseCodes.map(c=>Object.assign({},c)),byCode={},aliases={},mapByCode={};
   codes.forEach((c,i)=>{byCode[c.c]=i;aliases[c.c]=c.c;if(c.nbos)aliases[c.nbos]=c.c;});

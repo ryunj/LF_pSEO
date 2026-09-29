@@ -26,6 +26,12 @@ def read(name):
 
 html = read("dashboard.html")
 data = read("data.js")
+xlsx = read(os.path.join("vendor", "xlsx.full.min.js"))
+if xlsx:
+    html = html.replace(
+        '<script src="vendor/xlsx.full.min.js"></script>',
+        "<script>%s</script>" % xlsx,
+    )
 if data:
     html = html.replace('<script src="data.js"></script>', "<script>%s</script>" % data)
 
