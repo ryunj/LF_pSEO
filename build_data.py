@@ -10,15 +10,18 @@ pSEO 대시보드 데이터 빌드
                  차수 · 키워드 · AF코드 · slug · 현재 운영중 · 업데이트 날짜 ·
                  최신 반영 · 미반영 분류 · 미반영 사유
                  → AF코드 ↔ 키워드 매핑의 기준(구글시트 PSEO 탭보다 우선)
-  3) (선택) mapping_seed.tsv : 대장에 없는 코드용 보조 매핑
+  3) (선택) AF코드 시트: 구글시트 PSEO 탭의 xlsx/csv
+                 매체코드명(NBOS등록)을 AF코드 별칭으로 사용
+                 대장에 없는 코드만 시트의 표시명을 사용
+  4) (선택) mapping_seed.tsv : 대장에 없는 코드용 보조 매핑
 
 출력
   data.js  : window.PSEO_DATA = {...}
 
 사용법
-  python3 build_data.py <실적CSV> [대장XLSX] [출력경로]
+  python3 build_data.py <실적CSV> [대장XLSX] [출력경로] [--af-map AF코드시트]
 """
-import csv, glob, json, os, re, sys
+import argparse, csv, glob, json, os, re
 from datetime import datetime
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -66,8 +69,11 @@ def ds(v):
 # ---------------------------------------------------------------- 대장 읽기
 def read_ledger(path):
     import openpyxl
-    ws = openpyxl.load_workbook(path, read_only=True, data_only=True)["전체대장"]
-    rows = list(ws.iter_rows(values_only=True))
+    wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
+    try:
+        rows = list(wb["전체대장"].iter_rows(values_only=True))
+    finally:
+        wb.close()
     head = [str(h or "").strip() for h in rows[0]]
     I = {h: i for i, h in enumerate(head)}
     need = ["차수", "키워드", "AF코드", "slug", "현재 운영중", "업데이트 날짜",
@@ -104,9 +110,120 @@ def read_seed():
     return out
 
 
+def clean_media_name(name):
+    """NBOS 접두사와 추천 꼬리를 제거해 화면 표시명을 만든다."""
+    name = str(name or "").strip()
+    name = re.sub(r"^\d+_(?:brand|cat)_", "", name, flags=re.IGNORECASE)
+    return re.sub(r"\s*추천\s*$", "", name).strip()
+
+
+def _read_tabular(path):
+    path = os.fspath(path)
+    if path.lower().endswith((".xlsx", ".xlsm")):
+        import openpyxl
+        wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
+        try:
+            ws = wb["PSEO"] if "PSEO" in wb.sheetnames else wb.active
+            return [list(r) for r in ws.iter_rows(values_only=True)]
+        finally:
+            wb.close()
+
+    with open(path, "rb") as f:
+        raw = f.read()
+    text = None
+    for enc in ("utf-8-sig", "utf-16", "cp949"):
+        try:
+            text = raw.decode(enc)
+            break
+        except UnicodeDecodeError:
+            continue
+    if text is None:
+        raise SystemExit("AF코드 시트 인코딩을 읽지 못했습니다: " + path)
+    first = next((line for line in text.splitlines() if line.strip()), "")
+    delimiter = "\t" if "\t" in first else ","
+    return list(csv.reader(text.splitlines(), delimiter=delimiter))
+
+
+def _find_header(rows, required):
+    for i, row in enumerate(rows[:12]):
+        head = [str(v or "").strip() for v in row]
+        if all(name in head for name in required):
+            return i, head
+    raise SystemExit("필수 열을 찾지 못했습니다: " + ", ".join(required))
+
+
+def read_af_map(path):
+    """AF코드별 표시명과 NBOS 등록명을 읽고 모든 이름 별칭을 만든다."""
+    rows = _read_tabular(path)
+    hi, head = _find_header(rows, ["매체코드", "매체코드명(NBOS등록)"])
+    I = {h: i for i, h in enumerate(head) if h}
+    out, aliases = {}, {}
+    for row in rows[hi + 1:]:
+        code = str(row[I["매체코드"]] or "").strip()
+        if not code.startswith("PS"):
+            continue
+        sheet_name = str(row[I["매체코드명(시트기재)"]] or "").strip() \
+            if "매체코드명(시트기재)" in I else ""
+        nbos_name = str(row[I["매체코드명(NBOS등록)"]] or "").strip()
+        name = clean_media_name(sheet_name or nbos_name)
+        out[code] = {"n": name, "nbos": nbos_name}
+        alias_values = [code, sheet_name, nbos_name]
+        if "utm_source" in I:
+            alias_values.append(str(row[I["utm_source"]] or "").strip())
+        for alias in alias_values:
+            if alias:
+                aliases[alias] = code
+    return out, aliases
+
+
+def refresh_embedded_html(source_html, af_map_path, out_path, source_name=None):
+    """독립형 HTML의 기존 대장 표시명은 유지하고 최신 NBOS 별칭만 갱신한다."""
+    source_html = os.fspath(source_html)
+    af_map_path = os.fspath(af_map_path)
+    out_path = os.fspath(out_path)
+    with open(source_html, encoding="utf-8") as f:
+        html = f.read()
+    match = re.search(r"window\.PSEO_DATA\s*=\s*(\{[\s\S]*?\});", html)
+    if not match:
+        raise ValueError("HTML에서 window.PSEO_DATA를 찾지 못했습니다.")
+
+    data = json.loads(match.group(1))
+    mapping, _ = read_af_map(af_map_path)
+    matched = 0
+    for record in data.get("codes", []):
+        mapped = mapping.get(record.get("c"))
+        if mapped and mapped.get("nbos"):
+            record["nbos"] = mapped["nbos"]
+            matched += 1
+
+    label = source_name or os.path.basename(af_map_path)
+    source = data.setdefault("source", {})
+    parts = [
+        part.strip()
+        for part in str(source.get("map", "")).split(" + ")
+        if part.strip()
+    ]
+    if label not in parts:
+        parts.append(label)
+    source["map"] = " + ".join(parts)
+    data["built"] = datetime.now().strftime("%Y-%m-%d %H:%M")
+
+    payload = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
+    refreshed = html[:match.start(1)] + payload + html[match.end(1):]
+    with open(out_path, "w", encoding="utf-8") as f:
+        f.write(refreshed)
+    return {
+        "matched": matched,
+        "missing": len(data.get("codes", [])) - matched,
+        "sheet_codes": len(mapping),
+    }
+
+
 # ---------------------------------------------------------------- 실적 읽기
-def read_perf(path):
-    raw = open(path, "rb").read()
+def read_perf(path, aliases=None):
+    aliases = aliases or {}
+    with open(path, "rb") as f:
+        raw = f.read()
     text = None
     for enc in ("utf-16", "utf-8-sig", "cp949"):
         try:
@@ -131,10 +248,24 @@ def read_perf(path):
     if not cols:
         raise SystemExit("날짜(YYYYMMDD) 열을 찾지 못했습니다.")
 
+    metric_match = re.search(
+        r"(?:^|[_\-\s])(pv|uv)(?=[_\-\s.]|$)",
+        os.path.basename(os.fspath(path)),
+        re.IGNORECASE,
+    )
+    single_metric = metric_match.group(1).lower() if metric_match else ""
+    header = [(c or "").strip() for c in rows[hi]]
+    code_col = header.index("AF코드") if "AF코드" in header else -1
+
     data, totals = {}, {}
     for r in rows[hi + 1:]:
-        met = (r[0] or "").strip().lower()
-        code = (r[1] or "").strip() if len(r) > 1 else ""
+        if single_metric and code_col >= 0:
+            met = single_metric
+            raw_code = (r[code_col] or "").strip() if len(r) > code_col else ""
+        else:
+            met = (r[0] or "").strip().lower()
+            raw_code = (r[1] or "").strip() if len(r) > 1 else ""
+        code = aliases.get(raw_code, raw_code)
         if met not in ("pv", "uv"):
             continue
         for j, d in cols:
@@ -147,7 +278,7 @@ def read_perf(path):
                 continue
             if not n:
                 continue
-            if code == "총계":
+            if code in ("총계", "총합계"):
                 totals.setdefault(d, {"pv": 0, "uv": 0})[met] += n
             elif code.startswith("PS"):
                 data.setdefault((d, code), {"pv": 0, "uv": 0})[met] += n
@@ -155,13 +286,15 @@ def read_perf(path):
 
 
 # ---------------------------------------------------------------- 빌드
-def build(perf_path, ledger_path, out_path):
+def build(perf_path, ledger_path, out_path, af_map_path=None):
     led = read_ledger(ledger_path) if ledger_path else {}
+    af_map, aliases = read_af_map(af_map_path) if af_map_path else ({}, {})
     seed = read_seed()
-    perf, totals = read_perf(perf_path)
+    perf, totals = read_perf(perf_path, aliases)
 
     seen = {c for (_, c) in perf}
-    all_codes = sorted(set(led) | seen, key=lambda c: int(re.sub(r"\D", "", c)))
+    all_codes = sorted(set(led) | seen,
+                       key=lambda c: int(re.sub(r"\D", "", c)))
 
     idx, codes, orphan = {}, [], []
     for c in all_codes:
@@ -169,8 +302,11 @@ def build(perf_path, ledger_path, out_path):
         if L:
             name, src = L["n"], "ledger"
         else:
-            name, src = seed.get(c, c), ("sheet" if c in seed else "none")
             orphan.append(c)
+            if c in af_map:
+                name, src = af_map[c]["n"], "sheet"
+            else:
+                name, src = seed.get(c, c), ("sheet" if c in seed else "none")
         t, b, g, k = split_name(name)
         if c.startswith("PSCAT"):
             t = "cat"
@@ -178,7 +314,8 @@ def build(perf_path, ledger_path, out_path):
                "ch": (L or {}).get("ch", ""), "slug": (L or {}).get("slug", ""),
                "live": (L or {}).get("live", ""), "upd": (L or {}).get("upd", ""),
                "new": (L or {}).get("new", ""), "miss": (L or {}).get("miss", ""),
-               "why": (L or {}).get("why", "")}
+               "why": (L or {}).get("why", ""),
+               "nbos": (af_map.get(c) or {}).get("nbos", "")}
         idx[c] = len(codes)
         codes.append(rec)
 
@@ -191,7 +328,10 @@ def build(perf_path, ledger_path, out_path):
         "from": dates[0] if dates else "",
         "built": datetime.now().strftime("%Y-%m-%d %H:%M"),
         "source": {"perf": os.path.basename(perf_path),
-                   "map": os.path.basename(ledger_path) if ledger_path else "mapping_seed.tsv"},
+                   "map": " + ".join(filter(None, [
+                       os.path.basename(ledger_path) if ledger_path else "",
+                       os.path.basename(af_map_path) if af_map_path else "",
+                   ])) or "mapping_seed.tsv"},
         "metrics": ["pv", "uv"],
         "codes": codes,
         "rows": rows,
@@ -210,9 +350,12 @@ def build(perf_path, ledger_path, out_path):
 
 
 if __name__ == "__main__":
-    if len(sys.argv) < 2:
-        raise SystemExit("사용법: python3 build_data.py <실적CSV> [대장XLSX] [data.js]")
-    perf = sys.argv[1]
-    ledger = sys.argv[2] if len(sys.argv) > 2 else (sorted(glob.glob(os.path.join(HERE, "*전체대장*.xlsx"))) or [None])[-1]
-    out = sys.argv[3] if len(sys.argv) > 3 else os.path.join(HERE, "data.js")
-    build(perf, ledger, out)
+    parser = argparse.ArgumentParser(description="pSEO 대시보드 데이터 빌드")
+    parser.add_argument("perf", help="PV·UV 실적 CSV")
+    parser.add_argument("ledger", nargs="?", help="콘텐츠 대장 xlsx")
+    parser.add_argument("out", nargs="?", default=os.path.join(HERE, "data.js"),
+                        help="출력 data.js")
+    parser.add_argument("--af-map", dest="af_map", help="PSEO AF코드 시트 xlsx/csv")
+    args = parser.parse_args()
+    ledger = args.ledger or (sorted(glob.glob(os.path.join(HERE, "*전체대장*.xlsx"))) or [None])[-1]
+    build(args.perf, ledger, args.out, args.af_map)

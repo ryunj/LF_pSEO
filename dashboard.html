@@ -101,13 +101,17 @@ input[type=search]{cursor:text;min-width:210px}
 .k{display:inline-block;width:14px;height:2px;border-radius:1px;background:var(--c1);vertical-align:middle}
 .k.prev{background:var(--prev)}
 .charts{display:grid;grid-template-columns:repeat(auto-fill,minmax(330px,1fr));gap:12px}
-.charts.two{grid-template-columns:repeat(auto-fit,minmax(330px,1fr))}
+.charts.two{grid-template-columns:repeat(3,minmax(0,1fr));align-items:start}
+#listCharts{grid-template-columns:repeat(3,minmax(0,1fr))}
 .cc{padding:12px 14px 8px;min-width:0}
 .cc-t{font-size:13px;font-weight:650}
 .cc-s{font-size:11px;color:var(--muted)}
-.cc-b{position:relative;height:172px;margin-top:4px}
-.cc.off .cc-b{height:78px}
+.cc-b{position:relative;aspect-ratio:2/1;height:auto;min-height:180px;max-height:260px;margin-top:4px}
+.cc.off .cc-b{aspect-ratio:auto;height:78px;min-height:78px}
 .cc-b svg{display:block;overflow:visible}
+@media (max-width:1024px){.charts.two{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media (max-width:1024px){#listCharts{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media (max-width:700px){.charts.two,#listCharts{grid-template-columns:1fr}.cc-b{min-height:200px;max-height:280px}}
 .gl{stroke:var(--grid);stroke-width:1;shape-rendering:crispEdges}
 .yt,.xt{fill:var(--muted);font-size:10.5px;font-variant-numeric:tabular-nums}
 .yt{text-anchor:end}
@@ -160,7 +164,7 @@ code{font-family:ui-monospace,Consolas,monospace;font-size:11.5px;color:var(--mu
         <button data-tab="list" aria-pressed="false">리스트 관리</button>
       </nav>
       <div class="bk-tools">
-        <button class="btn" type="button" id="btnLoad" title="새 PV·UV 크로스탭 CSV / 시트 매핑 CSV 올리기">데이터 갱신</button>
+        <button class="btn" type="button" id="btnLoad" title="PV·UV 실적 / 콘텐츠 대장 / AF코드 매핑 파일 올리기">데이터 갱신</button>
         <input type="file" id="fileLoad" accept=".csv,.tsv,.txt" multiple hidden>
         <button class="btn" type="button" id="btnXls">엑셀</button>
       </div>
@@ -224,7 +228,8 @@ code{font-family:ui-monospace,Consolas,monospace;font-size:11.5px;color:var(--mu
       이 저장소에는 실적·대장 데이터를 두지 않습니다. 아래 파일을 <b>이 화면에 끌어다 놓거나</b> 위 <b>데이터 갱신</b> 버튼으로 고르면 바로 그려집니다.<br>
       1. <b>PV·UV 크로스탭</b> — 행 = PV/UV × AF코드, 열 = 유입 연월일(YYYYMMDD). 태블로에서 받은 UTF-16 CSV 그대로 가능<br>
       2. <b>콘텐츠 대장</b> — <code>차수 · 키워드 · AF코드 · slug · 현재 운영중 · 업데이트 날짜 · 최신 반영 · 미반영 분류 · 미반영 사유</code> 열이 있는 CSV<br>
-      <span class="hint">xlsx 는 브라우저에서 못 읽습니다 — CSV 로 저장해 올리거나 <code>python3 build_data.py &lt;실적CSV&gt; &lt;대장XLSX&gt;</code> 로 data.js 를 만드세요.</span>
+      3. <b>AF코드 시트</b> — <code>매체코드 · 매체코드명(NBOS등록)</code> 열이 있는 PSEO 탭 CSV. NBOS 등록명도 AF코드로 매칭합니다.<br>
+      <span class="hint">xlsx 는 브라우저에서 못 읽습니다 — CSV 로 저장해 올리거나 <code>python3 build_data.py &lt;실적CSV&gt; &lt;대장XLSX&gt; --af-map &lt;AF코드시트XLSX&gt;</code> 로 data.js 를 만드세요.</span>
     </div>
   </div>
 
@@ -339,6 +344,15 @@ prep();
 const ymd=d=>d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
 const addD=(d,n)=>{const x=new Date(d);x.setDate(x.getDate()+n);return x;};
 function isoWeek(d){const x=new Date(d);x.setDate(x.getDate()+4-(x.getDay()||7));const y0=new Date(x.getFullYear(),0,1);return{y:x.getFullYear(),w:Math.ceil(((x-y0)/86400000+1)/7)};}
+function weekLabel(id){
+  const year=Number(id.slice(0,4)),weekNo=Number(id.slice(6));
+  const jan4=new Date(year,0,4),jan4Dow=jan4.getDay()||7;
+  const monday=addD(jan4,1-jan4Dow+(weekNo-1)*7);
+  const first=new Date(monday.getFullYear(),monday.getMonth(),1);
+  const offset=(first.getDay()||7)-1;
+  const week=Math.floor((monday.getDate()+offset-1)/7)+1;
+  return (monday.getMonth()+1)+'월 '+week+'주차';
+}
 function pid(ds,grain){
   if(grain==='day')return ds;
   if(grain==='month')return ds.slice(0,7);
@@ -348,7 +362,7 @@ function plabel(id,grain){
   if(!id)return '–';
   if(grain==='day')return id.slice(5).replace('-','/');
   if(grain==='month')return id.slice(0,4)+'.'+id.slice(5,7);
-  return id.slice(2,4)+'년 '+Number(id.slice(6))+'주';
+  return weekLabel(id);
 }
 function allPeriods(grain){
   const s=new Set();(D.rows||[]).forEach(r=>s.add(pid(r[0],grain)));
@@ -507,7 +521,7 @@ function line(cs,ps,labs){
   const lv=[...cs].reverse().find(v=>v!=null&&!isNaN(v));
   const li2=cs.length-1-[...cs].reverse().findIndex(v=>v!=null&&!isNaN(v));
   const dot=lv==null?'':'<circle cx="'+x(li2)+'" cy="'+y(lv)+'" r="3" fill="var(--c1)"/>';
-  return '<svg viewBox="0 0 '+W+' '+H+'" preserveAspectRatio="none" width="100%" height="100%" role="img">'+g+xt+pl+'<path class="ln" d="'+path(cs)+'"/>'+dot+'</svg>';
+  return '<svg viewBox="0 0 '+W+' '+H+'" preserveAspectRatio="xMidYMid meet" width="100%" height="100%" role="img">'+g+xt+pl+'<path class="ln" d="'+path(cs)+'"/>'+dot+'</svg>';
 }
 function renderPeriodTable(A,view,at){
   const cmpN='직전';
@@ -705,7 +719,7 @@ function bars(vals,labs){
   const xt=labs.map((l,i)=>{const t=l.length>cut?l.slice(0,cut)+'…':l;
     return rot?'<text class="xt" x="'+x(i)+'" y="'+(H-8)+'" text-anchor="end" transform="rotate(-28 '+x(i)+' '+(H-8)+')">'+t+'</text>'
               :'<text class="xt" x="'+x(i)+'" y="'+(H-8)+'" text-anchor="middle">'+t+'</text>';}).join('');
-  return '<svg viewBox="0 0 '+W+' '+H+'" preserveAspectRatio="none" width="100%" height="100%" role="img">'+g+b+xt+'</svg>';
+  return '<svg viewBox="0 0 '+W+' '+H+'" preserveAspectRatio="xMidYMid meet" width="100%" height="100%" role="img">'+g+b+xt+'</svg>';
 }
 
 /* ===================== 컨트롤 ===================== */
@@ -779,6 +793,7 @@ function srcNote(){
   document.getElementById('srcNote').innerHTML=
     '<b>연결된 데이터</b><span>PV · UV / '+(D.from||'–')+' ~ '+(D.asof||'–')+' ('+n+'일) · 매체코드 '+CODE.length.toLocaleString('ko-KR')+'건</span>'+
     '<span class="hint">원본: '+((D.source&&D.source.perf)||'–')+' · 매핑: '+((D.source&&D.source.map)||'–')+' · 빌드 '+(D.built||'–')+'</span>'+
+    (D.source&&D.source.backup?'<span class="hint">· '+D.source.backup+'</span>':'')+
     (CODE.filter(c=>c.src&&c.src!=='ledger').length
       ? '<span class="hint" style="color:var(--c2)">· 대장에 없는 코드 '+CODE.filter(c=>c.src&&c.src!=='ledger').length+'건은 AF코드 시트 이름으로 표시</span>' : '');
   document.getElementById('asof').textContent='기준 '+(D.asof||'').replace(/-/g,'.');
@@ -845,25 +860,88 @@ async function readFile(file){
   if(u8[0]===0xFF&&u8[1]===0xFE)return new TextDecoder('utf-16le').decode(buf);
   return new TextDecoder('utf-8').decode(buf);
 }
+function findHeader(rows,names){
+  for(let hi=0;hi<Math.min(rows.length,12);hi++){
+    const H=rows[hi].map(x=>String(x||'').trim());
+    if(names.every(n=>H.includes(n)))return {hi,H};
+  }
+  return null;
+}
+function cleanMediaName(name){
+  return String(name||'').trim().replace(/^\d+_(?:brand|cat)_/i,'').replace(/\s*추천\s*$/,'').trim();
+}
+const FILE_INPUT={perf:null,map:null,led:null,perfName:'',mapName:'',ledName:'',
+  baseCodes:(D.codes||[]).map(c=>Object.assign({},c)),baseRows:(D.rows||[]).map(r=>r.slice()),
+  baseTotal:Object.assign({},D.total||{}),baseSource:Object.assign({},D.source||{})};
+const BACKUP_DB='pseo-dashboard',BACKUP_STORE='state',BACKUP_KEY='last-data';
+function openBackupDb(){
+  return new Promise((resolve,reject)=>{
+    if(!('indexedDB' in window)){resolve(null);return;}
+    const req=indexedDB.open(BACKUP_DB,1);
+    req.onupgradeneeded=()=>{if(!req.result.objectStoreNames.contains(BACKUP_STORE))req.result.createObjectStore(BACKUP_STORE,{keyPath:'key'});};
+    req.onsuccess=()=>resolve(req.result);
+    req.onerror=()=>reject(req.error);
+  });
+}
+async function saveBackup(data){
+  try{
+    const db=await openBackupDb();if(!db)return;
+    await new Promise((resolve,reject)=>{
+      const tx=db.transaction(BACKUP_STORE,'readwrite');
+      tx.objectStore(BACKUP_STORE).put({key:BACKUP_KEY,savedAt:Date.now(),data});
+      tx.oncomplete=resolve;tx.onerror=()=>reject(tx.error);tx.onabort=()=>reject(tx.error);
+    });
+    db.close();
+  }catch(err){console.warn('대시보드 자동 백업 실패',err);}
+}
+async function loadBackup(){
+  try{
+    const db=await openBackupDb();if(!db)return null;
+    const saved=await new Promise((resolve,reject)=>{
+      const req=db.transaction(BACKUP_STORE,'readonly').objectStore(BACKUP_STORE).get(BACKUP_KEY);
+      req.onsuccess=()=>resolve(req.result||null);req.onerror=()=>reject(req.error);
+    });
+    db.close();return saved;
+  }catch(err){console.warn('대시보드 자동 복원 실패',err);return null;}
+}
+function setBaseData(data){
+  FILE_INPUT.baseCodes=(data.codes||[]).map(c=>Object.assign({},c));
+  FILE_INPUT.baseRows=(data.rows||[]).map(r=>r.slice());
+  FILE_INPUT.baseTotal=Object.assign({},data.total||{});
+  FILE_INPUT.baseSource=Object.assign({},data.source||{});
+  FILE_INPUT.perf=FILE_INPUT.map=FILE_INPUT.led=null;
+  FILE_INPUT.perfName=FILE_INPUT.mapName=FILE_INPUT.ledName='';
+}
+async function restoreLastBackup(){
+  const saved=await loadBackup();
+  if(saved&&saved.data&&Array.isArray(saved.data.codes)){
+    const latestAliases=new Map(FILE_INPUT.baseCodes.filter(c=>c.nbos).map(c=>[c.c,c.nbos]));
+    saved.data.codes.forEach(c=>{if(latestAliases.has(c.c))c.nbos=latestAliases.get(c.c);});
+    D=saved.data;D.source=Object.assign({},D.source||{},{backup:'브라우저 자동 복원'});
+    setBaseData(D);
+  }
+  prep();syncSelectors();srcNote();draw();
+}
 async function loadFiles(files){
-  let perf=null,map=null,led=null,perfName='',mapName='',ledName='';
   for(const f of files){
     const txt=await readFile(f),rows=parseCSV(txt);
     const head=rows.slice(0,6).flat().join('|');
-    if(head.includes('AF코드')&&head.includes('키워드')){led=rows;ledName=f.name;}
-    else if(head.includes('매체코드')){map=rows;mapName=f.name;}
-    else{perf=rows;perfName=f.name;}
+    if(head.includes('AF코드')&&head.includes('키워드')){FILE_INPUT.led=rows;FILE_INPUT.ledName=f.name;}
+    else if(head.includes('매체코드')){FILE_INPUT.map=rows;FILE_INPUT.mapName=f.name;}
+    else{FILE_INPUT.perf=rows;FILE_INPUT.perfName=f.name;}
   }
-  const codes=(D.codes||[]).slice(),byCode={};
-  codes.forEach((c,i)=>byCode[c.c]=i);
+  const {perf,map,led,perfName,mapName,ledName}=FILE_INPUT;
+  const codes=FILE_INPUT.baseCodes.map(c=>Object.assign({},c)),byCode={},aliases={},mapByCode={};
+  codes.forEach((c,i)=>{byCode[c.c]=i;aliases[c.c]=c.c;if(c.nbos)aliases[c.nbos]=c.c;});
   if(led){                                   // 콘텐츠 대장이 매핑의 기준
-    const H=led[0].map(x=>(x||'').trim()),I=n=>H.indexOf(n);
+    const found=findHeader(led,['AF코드','키워드']);
+    if(!found){alert('대장 CSV 에서 AF코드 / 키워드 열을 찾지 못했습니다.');return;}
+    const {hi,H}=found,I=n=>H.indexOf(n);
     const iC=I('AF코드'),iN=I('키워드');
-    if(iC<0||iN<0){alert('대장 CSV 에서 AF코드 / 키워드 열을 찾지 못했습니다.');return;}
     const cols={ch:I('차수'),slug:I('slug'),live:I('현재 운영중'),upd:I('업데이트 날짜'),
                 nw:I('최신 반영'),miss:I('미반영 분류'),why:I('미반영 사유')};
     const g=(r,i)=>i>=0?String(r[i]||'').trim():'';
-    led.slice(1).forEach(r=>{
+    led.slice(hi+1).forEach(r=>{
       const code=(r[iC]||'').trim();if(!code.startsWith('PS'))return;
       const name=(r[iN]||'').trim().replace(/\s*추천\s*$/,''),pp=splitName(name);
       const rec={c:code,n:name,t:code.startsWith('PSCAT')?'cat':pp.t,b:pp.b,g:pp.g,k:pp.k,src:'ledger',
@@ -873,34 +951,47 @@ async function loadFiles(files){
     });
   }
   if(map){
-    const H=map[0],iC=H.indexOf('매체코드'),iN=H.indexOf('매체코드명(시트기재)');
-    if(iC<0){alert('매핑 CSV에서 매체코드 열을 찾지 못했습니다.');return;}
-    map.slice(1).forEach(r=>{
+    const found=findHeader(map,['매체코드','매체코드명(NBOS등록)']);
+    if(!found){alert('매핑 CSV에서 매체코드 / 매체코드명(NBOS등록) 열을 찾지 못했습니다.');return;}
+    const {hi,H}=found,iC=H.indexOf('매체코드'),iN=H.indexOf('매체코드명(시트기재)'),
+          iNbos=H.indexOf('매체코드명(NBOS등록)'),iUtm=H.indexOf('utm_source');
+    map.slice(hi+1).forEach(r=>{
       const code=(r[iC]||'').trim();if(!code.startsWith('PS'))return;
-      const name=(r[iN]||'').trim(),p=splitName(name);
-      const num=+code.replace(/\D/g,'');
+      const sheetName=iN>=0?String(r[iN]||'').trim():'',nbos=String(r[iNbos]||'').trim();
+      const name=cleanMediaName(sheetName||nbos),p=splitName(name);
+      aliases[code]=code;if(sheetName)aliases[sheetName]=code;if(nbos)aliases[nbos]=code;
+      if(iUtm>=0&&r[iUtm])aliases[String(r[iUtm]).trim()]=code;
       const prevRec=byCode[code]!=null?codes[byCode[code]]:{};
-      const rec=Object.assign({},prevRec,{c:code,n:name.replace(/\s*추천\s*$/,''),t:code.startsWith('PSCAT')?'cat':p.t,b:p.b,g:p.g,k:p.k});
-      if(byCode[code]!=null)codes[byCode[code]]=rec;else{byCode[code]=codes.length;codes.push(rec);}
+      const mapped={c:code,n:name,t:code.startsWith('PSCAT')?'cat':p.t,b:p.b,g:p.g,k:p.k,src:'sheet',nbos};
+      mapByCode[code]=mapped;
+      const rec=prevRec.src==='ledger'
+        ? Object.assign({},prevRec,{nbos})
+        : Object.assign({},prevRec,mapped);
+      if(byCode[code]!=null)codes[byCode[code]]=rec;
     });
   }
-  let rows=D.rows,total=D.total;
+  let rows=FILE_INPUT.baseRows.map(r=>r.slice()),total=Object.assign({},FILE_INPUT.baseTotal);
   if(perf){
     let hi=0,best=-1;
     perf.slice(0,8).forEach((r,i)=>{const n=r.filter(c=>/^\d{8}$/.test((c||'').trim())).length;if(n>best){hi=i;best=n;}});
     const cols=[];perf[hi].forEach((c,j)=>{if(/^\d{8}$/.test((c||'').trim()))cols.push([j,c.trim()]);});
     if(!cols.length){alert('실적 CSV에서 YYYYMMDD 날짜 열을 찾지 못했습니다.');return;}
+    const perfHead=perf[hi].map(c=>String(c||'').trim()),codeCol=perfHead.indexOf('AF코드');
+    const metricMatch=String(perfName||'').match(/(?:^|[_\-\s])(pv|uv)(?=[_\-\s.]|$)/i);
+    const singleMetric=metricMatch?metricMatch[1].toLowerCase():'';
     const acc={},tot={};
     perf.slice(hi+1).forEach(r=>{
-      const met=(r[0]||'').trim().toLowerCase(),code=(r[1]||'').trim();
+      const met=singleMetric&&codeCol>=0?singleMetric:(r[0]||'').trim().toLowerCase();
+      const rawCode=singleMetric&&codeCol>=0?String(r[codeCol]||'').trim():String(r[1]||'').trim();
+      const code=aliases[rawCode]||rawCode;
       if(met!=='pv'&&met!=='uv')return;
       cols.forEach(([j,d])=>{
         const v=(r[j]||'').trim().replace(/,/g,'');if(!v)return;
         const n=Math.round(parseFloat(v));if(!n||isNaN(n))return;
         const ds=d.slice(0,4)+'-'+d.slice(4,6)+'-'+d.slice(6);
-        if(code==='총계'){(tot[ds]=tot[ds]||{pv:0,uv:0})[met]+=n;return;}
+        if(code==='총계'||code==='총합계'){(tot[ds]=tot[ds]||{pv:0,uv:0})[met]+=n;return;}
         if(!code.startsWith('PS'))return;
-        if(byCode[code]==null){byCode[code]=codes.length;codes.push({c:code,n:code,t:code.startsWith('PSCAT')?'cat':'br',b:'',g:'',k:'미매핑',src:'none'});}
+        if(byCode[code]==null){byCode[code]=codes.length;codes.push(mapByCode[code]||{c:code,n:code,t:code.startsWith('PSCAT')?'cat':'br',b:'',g:'',k:'미매핑',src:'none'});}
         const key=ds+'|'+byCode[code];
         (acc[key]=acc[key]||{pv:0,uv:0})[met]+=n;
       });
@@ -910,8 +1001,9 @@ async function loadFiles(files){
   }
   const dates=[...new Set(rows.map(r=>r[0]))].sort();
   D={asof:dates[dates.length-1]||'',from:dates[0]||'',built:new Date().toISOString().slice(0,16).replace('T',' '),
-     source:{perf:perfName||((D.source&&D.source.perf)||'–'),map:ledName||mapName||((D.source&&D.source.map)||'–')},
+     source:{perf:perfName||(FILE_INPUT.baseSource.perf||'–'),map:[ledName,mapName].filter(Boolean).join(' + ')||(FILE_INPUT.baseSource.map||'–')},
      metrics:['pv','uv'],codes,rows,total};
+  await saveBackup(D);
   prep();S.at=null;syncSelectors();srcNote();draw();
 }
 document.getElementById('btnLoad').onclick=()=>document.getElementById('fileLoad').click();
@@ -931,7 +1023,7 @@ function tableToXls(el,name){
 document.getElementById('btnXls').onclick=()=>tableToXls(document.getElementById(S.tab==='perf'?'tblPeriod':'tblList'),'pseo_'+(D.asof||''));
 document.getElementById('btnListXls').onclick=()=>tableToXls(document.getElementById('tblList'),'pseo_페이지리스트_'+(D.asof||''));
 
-syncSelectors();srcNote();draw();
+restoreLastBackup();
 </script>
 </body>
 </html>
