@@ -86,6 +86,9 @@ input[type=search]{cursor:text;min-width:210px}
 .card{background:var(--surface);border:1px solid var(--border);border-radius:10px}
 .btn{border:1px solid var(--border);background:var(--surface);border-radius:6px;padding:4px 10px;font-size:12px;cursor:pointer;color:var(--ink-2)}
 .btn:hover{color:var(--ink)}
+.upload-status{font-size:12px;color:var(--muted);min-height:18px;max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.upload-status[data-tone="ok"]{color:var(--pos)}
+.upload-status[data-tone="error"]{color:var(--neg)}
 .note{padding:10px 14px;font-size:12px;color:var(--ink-2);display:flex;gap:10px;align-items:center;flex-wrap:wrap}
 .note b{color:var(--ink)}
 .tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(172px,1fr));background:var(--surface);border:1px solid var(--border);border-radius:10px;overflow:hidden}
@@ -167,6 +170,7 @@ code{font-family:ui-monospace,Consolas,monospace;font-size:11.5px;color:var(--mu
       <div class="bk-tools">
         <button class="btn" type="button" id="btnLoad" title="PV·UV 실적 / 콘텐츠 대장 / AF코드 매핑 파일 올리기">데이터 갱신</button>
         <input type="file" id="fileLoad" accept=".csv,.tsv,.txt,.xlsx,.xlsm,.xls" multiple hidden>
+        <span class="upload-status" id="uploadStatus" role="status" aria-live="polite"></span>
         <button class="btn" type="button" id="btnXls">엑셀</button>
       </div>
     </div>
@@ -893,7 +897,7 @@ function sheetPriority(kind,name){
 function cleanMediaName(name){
   return String(name||'').trim().replace(/^\d+_(?:brand|cat)_/i,'').replace(/\s*추천\s*$/,'').trim();
 }
-const FILE_INPUT={perf:null,map:null,led:null,perfName:'',mapName:'',ledName:'',
+const FILE_INPUT={perfFiles:[],map:null,led:null,mapName:'',ledName:'',
   baseCodes:(D.codes||[]).map(c=>Object.assign({},c)),baseRows:(D.rows||[]).map(r=>r.slice()),
   baseTotal:Object.assign({},D.total||{}),baseSource:Object.assign({},D.source||{})};
 const BACKUP_DB='pseo-dashboard',BACKUP_STORE='state',BACKUP_KEY='last-data';
@@ -932,8 +936,56 @@ function setBaseData(data){
   FILE_INPUT.baseRows=(data.rows||[]).map(r=>r.slice());
   FILE_INPUT.baseTotal=Object.assign({},data.total||{});
   FILE_INPUT.baseSource=Object.assign({},data.source||{});
-  FILE_INPUT.perf=FILE_INPUT.map=FILE_INPUT.led=null;
-  FILE_INPUT.perfName=FILE_INPUT.mapName=FILE_INPUT.ledName='';
+  FILE_INPUT.perfFiles=[];FILE_INPUT.map=FILE_INPUT.led=null;
+  FILE_INPUT.mapName=FILE_INPUT.ledName='';
+}
+function setUploadStatus(message,tone=''){
+  const el=document.getElementById('uploadStatus');
+  el.textContent=message;el.dataset.tone=tone;
+}
+function metricFromName(name){
+  const match=String(name||'').match(/(?:^|[_\-\s])(pv|uv)(?=[_\-\s.]|$)/i);
+  return match?match[1].toLowerCase():'';
+}
+function keepPerformanceFile(item){
+  const hasExplicitMetrics=item.rows.some(r=>r.length&&['pv','uv'].includes(String(r[0]||'').trim().toLowerCase()));
+  if(hasExplicitMetrics){FILE_INPUT.perfFiles=[item];return;}
+  const metric=metricFromName(item.sourceName);
+  if(!metric){FILE_INPUT.perfFiles=[item];return;}
+  FILE_INPUT.perfFiles=FILE_INPUT.perfFiles.filter(file=>metricFromName(file.sourceName)!==metric);
+  FILE_INPUT.perfFiles.push(item);
+}
+function parsePerformanceFiles(perfFiles,aliases,codes,byCode,mapByCode){
+  const acc={},tot={};
+  for(const perfFile of perfFiles){
+    const perf=perfFile.rows,perfName=perfFile.sourceName;
+    let hi=0,best=-1;
+    perf.slice(0,8).forEach((r,i)=>{const n=r.filter(c=>/^\d{8}$/.test(String(c||'').trim())).length;if(n>best){hi=i;best=n;}});
+    const cols=[];perf[hi].forEach((c,j)=>{if(/^\d{8}$/.test(String(c||'').trim()))cols.push([j,String(c).trim()]);});
+    if(!cols.length)throw new Error(perfName+'에서 YYYYMMDD 날짜 열을 찾지 못했습니다.');
+    const perfHead=perf[hi].map(c=>String(c||'').trim()),codeCol=perfHead.indexOf('AF코드');
+    const singleMetric=metricFromName(perfName);
+    const hasExplicitMetrics=perf.slice(hi+1).some(r=>r.length&&['pv','uv'].includes(String(r[0]||'').trim().toLowerCase()));
+    perf.slice(hi+1).forEach(r=>{
+      const met=singleMetric&&codeCol>=0&&!hasExplicitMetrics?singleMetric:String(r[0]||'').trim().toLowerCase();
+      const rawCode=codeCol>=0?String(r[codeCol]||'').trim():'';
+      const code=aliases[rawCode]||rawCode;
+      if(met!=='pv'&&met!=='uv')return;
+      cols.forEach(([j,d])=>{
+        const v=String(r[j]||'').trim().replace(/,/g,'');if(!v)return;
+        const n=Math.round(parseFloat(v));if(!n||isNaN(n))return;
+        const ds=d.slice(0,4)+'-'+d.slice(4,6)+'-'+d.slice(6);
+        if(code==='총계'||code==='총합계'){(tot[ds]=tot[ds]||{pv:0,uv:0})[met]+=n;return;}
+        if(!code.startsWith('PS'))return;
+        if(byCode[code]==null){byCode[code]=codes.length;codes.push(mapByCode[code]||{c:code,n:code,t:code.startsWith('PSCAT')?'cat':'br',b:'',g:'',k:'미매핑',src:'none'});}
+        const key=ds+'|'+byCode[code];
+        (acc[key]=acc[key]||{pv:0,uv:0})[met]+=n;
+      });
+    });
+  }
+  const rows=Object.entries(acc).map(([k,v])=>{const[ds,i]=k.split('|');return [ds,+i,v.pv,v.uv];}).sort((a,b)=>a[0]<b[0]?-1:1);
+  const total={};Object.keys(tot).sort().forEach(d=>total[d]=[tot[d].pv,tot[d].uv]);
+  return {rows,total};
 }
 async function restoreLastBackup(){
   const saved=await loadBackup();
@@ -946,12 +998,13 @@ async function restoreLastBackup(){
   prep();syncSelectors();srcNote();draw();
 }
 async function loadFiles(files){
+  setUploadStatus('파일 확인 중…');
   const unknown=[];
   let recognized=0;
   for(const f of files){
     let sheets;
     try{sheets=await readUploadSheets(f);}
-    catch(err){alert(err.message||('파일을 읽지 못했습니다: '+f.name));return;}
+    catch(err){const msg=err.message||('파일을 읽지 못했습니다: '+f.name);setUploadStatus(msg,'error');alert(msg);return;}
     const selected={};
     for(const item of sheets){
       const rows=item.rows;
@@ -965,17 +1018,17 @@ async function loadFiles(files){
       recognized++;
       if(kind==='led'){FILE_INPUT.led=item.rows;FILE_INPUT.ledName=item.sourceName;}
       else if(kind==='map'){FILE_INPUT.map=item.rows;FILE_INPUT.mapName=item.sourceName;}
-      else if(kind==='perf'){FILE_INPUT.perf=item.rows;FILE_INPUT.perfName=item.sourceName;}
+      else if(kind==='perf'){keepPerformanceFile(item);}
     });
   }
-  if(!recognized){alert('업데이트할 수 있는 시트를 찾지 못했습니다. AF코드·키워드, 매체코드, 또는 YYYYMMDD 열을 확인해 주세요.');return;}
+  if(!recognized){const msg='업데이트할 수 있는 시트를 찾지 못했습니다. AF코드·키워드, 매체코드, 또는 YYYYMMDD 열을 확인해 주세요.';setUploadStatus(msg,'error');alert(msg);return;}
   if(unknown.length)console.info('지원 열이 없어 건너뛴 시트:',unknown);
-  const {perf,map,led,perfName,mapName,ledName}=FILE_INPUT;
+  const {perfFiles,map,led,mapName,ledName}=FILE_INPUT;
   const codes=FILE_INPUT.baseCodes.map(c=>Object.assign({},c)),byCode={},aliases={},mapByCode={};
   codes.forEach((c,i)=>{byCode[c.c]=i;aliases[c.c]=c.c;if(c.nbos)aliases[c.nbos]=c.c;});
   if(led){                                   // 콘텐츠 대장이 매핑의 기준
     const found=findHeader(led,['AF코드','키워드']);
-    if(!found){alert('대장 CSV 에서 AF코드 / 키워드 열을 찾지 못했습니다.');return;}
+    if(!found){const msg='대장 파일에서 AF코드 / 키워드 열을 찾지 못했습니다.';setUploadStatus(msg,'error');alert(msg);return;}
     const {hi,H}=found,I=n=>H.indexOf(n);
     const iC=I('AF코드'),iN=I('키워드');
     const cols={ch:I('차수'),slug:I('slug'),live:I('현재 운영중'),upd:I('업데이트 날짜'),
@@ -992,7 +1045,7 @@ async function loadFiles(files){
   }
   if(map){
     const found=findHeader(map,['매체코드','매체코드명(NBOS등록)']);
-    if(!found){alert('매핑 CSV에서 매체코드 / 매체코드명(NBOS등록) 열을 찾지 못했습니다.');return;}
+    if(!found){const msg='매핑 파일에서 매체코드 / 매체코드명(NBOS등록) 열을 찾지 못했습니다.';setUploadStatus(msg,'error');alert(msg);return;}
     const {hi,H}=found,iC=H.indexOf('매체코드'),iN=H.indexOf('매체코드명(시트기재)'),
           iNbos=H.indexOf('매체코드명(NBOS등록)'),iUtm=H.indexOf('utm_source');
     map.slice(hi+1).forEach(r=>{
@@ -1011,40 +1064,17 @@ async function loadFiles(files){
     });
   }
   let rows=FILE_INPUT.baseRows.map(r=>r.slice()),total=Object.assign({},FILE_INPUT.baseTotal);
-  if(perf){
-    let hi=0,best=-1;
-    perf.slice(0,8).forEach((r,i)=>{const n=r.filter(c=>/^\d{8}$/.test((c||'').trim())).length;if(n>best){hi=i;best=n;}});
-    const cols=[];perf[hi].forEach((c,j)=>{if(/^\d{8}$/.test((c||'').trim()))cols.push([j,c.trim()]);});
-    if(!cols.length){alert('실적 CSV에서 YYYYMMDD 날짜 열을 찾지 못했습니다.');return;}
-    const perfHead=perf[hi].map(c=>String(c||'').trim()),codeCol=perfHead.indexOf('AF코드');
-    const metricMatch=String(perfName||'').match(/(?:^|[_\-\s])(pv|uv)(?=[_\-\s.]|$)/i);
-    const singleMetric=metricMatch?metricMatch[1].toLowerCase():'';
-    const acc={},tot={};
-    perf.slice(hi+1).forEach(r=>{
-      const met=singleMetric&&codeCol>=0?singleMetric:(r[0]||'').trim().toLowerCase();
-      const rawCode=singleMetric&&codeCol>=0?String(r[codeCol]||'').trim():String(r[1]||'').trim();
-      const code=aliases[rawCode]||rawCode;
-      if(met!=='pv'&&met!=='uv')return;
-      cols.forEach(([j,d])=>{
-        const v=(r[j]||'').trim().replace(/,/g,'');if(!v)return;
-        const n=Math.round(parseFloat(v));if(!n||isNaN(n))return;
-        const ds=d.slice(0,4)+'-'+d.slice(4,6)+'-'+d.slice(6);
-        if(code==='총계'||code==='총합계'){(tot[ds]=tot[ds]||{pv:0,uv:0})[met]+=n;return;}
-        if(!code.startsWith('PS'))return;
-        if(byCode[code]==null){byCode[code]=codes.length;codes.push(mapByCode[code]||{c:code,n:code,t:code.startsWith('PSCAT')?'cat':'br',b:'',g:'',k:'미매핑',src:'none'});}
-        const key=ds+'|'+byCode[code];
-        (acc[key]=acc[key]||{pv:0,uv:0})[met]+=n;
-      });
-    });
-    rows=Object.entries(acc).map(([k,v])=>{const[ds,i]=k.split('|');return [ds,+i,v.pv,v.uv];}).sort((a,b)=>a[0]<b[0]?-1:1);
-    total={};Object.keys(tot).sort().forEach(d=>total[d]=[tot[d].pv,tot[d].uv]);
+  if(perfFiles.length){
+    try{({rows,total}=parsePerformanceFiles(perfFiles,aliases,codes,byCode,mapByCode));}
+    catch(err){const msg=err.message||'실적 파일을 처리하지 못했습니다.';setUploadStatus(msg,'error');alert(msg);return;}
   }
   const dates=[...new Set(rows.map(r=>r[0]))].sort();
   D={asof:dates[dates.length-1]||'',from:dates[0]||'',built:new Date().toISOString().slice(0,16).replace('T',' '),
-     source:{perf:perfName||(FILE_INPUT.baseSource.perf||'–'),map:[ledName,mapName].filter(Boolean).join(' + ')||(FILE_INPUT.baseSource.map||'–')},
+     source:{perf:perfFiles.map(file=>file.sourceName).join(' + ')||(FILE_INPUT.baseSource.perf||'–'),map:[ledName,mapName].filter(Boolean).join(' + ')||(FILE_INPUT.baseSource.map||'–')},
      metrics:['pv','uv'],codes,rows,total};
   await saveBackup(D);
   prep();S.at=null;syncSelectors();srcNote();draw();
+  setUploadStatus('데이터 갱신 완료 · '+files.length+'개 파일 · 실적 '+rows.length.toLocaleString()+'행','ok');
 }
 document.getElementById('btnLoad').onclick=()=>document.getElementById('fileLoad').click();
 document.getElementById('fileLoad').onchange=e=>{if(e.target.files.length)loadFiles([...e.target.files]);e.target.value='';};

@@ -17,7 +17,18 @@ class DashboardContractTests(unittest.TestCase):
     def test_browser_retains_sources_for_sequential_uploads(self):
         self.assertIn("const FILE_INPUT=", DASHBOARD)
         self.assertIn("mapByCode", DASHBOARD)
-        self.assertRegex(DASHBOARD, r"FILE_INPUT\.(?:perf|map|led)=item\.rows")
+        self.assertRegex(DASHBOARD, r"FILE_INPUT\.(?:map|led)=item\.rows")
+
+    def test_browser_keeps_separate_pv_and_uv_uploads(self):
+        self.assertIn("perfFiles:[]", DASHBOARD)
+        self.assertIn("FILE_INPUT.perfFiles.push", DASHBOARD)
+        self.assertRegex(DASHBOARD, r"for\s*\(const perfFile of perfFiles\)")
+        self.assertIn("if(hasExplicitMetrics){FILE_INPUT.perfFiles=[item]", DASHBOARD)
+
+    def test_browser_reports_upload_result_in_the_page(self):
+        self.assertIn('id="uploadStatus"', DASHBOARD)
+        self.assertIn("function setUploadStatus", DASHBOARD)
+        self.assertIn("데이터 갱신 완료", DASHBOARD)
 
     def test_flow_chart_keeps_a_readable_responsive_ratio(self):
         chart_grid = re.search(r"\.charts\.two\{([^}]+)\}", DASHBOARD)

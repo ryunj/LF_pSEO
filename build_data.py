@@ -256,15 +256,19 @@ def read_perf(path, aliases=None):
     single_metric = metric_match.group(1).lower() if metric_match else ""
     header = [(c or "").strip() for c in rows[hi]]
     code_col = header.index("AF코드") if "AF코드" in header else -1
+    has_explicit_metrics = any(
+        r and (r[0] or "").strip().lower() in ("pv", "uv")
+        for r in rows[hi + 1:]
+    )
 
     data, totals = {}, {}
     for r in rows[hi + 1:]:
-        if single_metric and code_col >= 0:
+        if single_metric and code_col >= 0 and not has_explicit_metrics:
             met = single_metric
             raw_code = (r[code_col] or "").strip() if len(r) > code_col else ""
         else:
             met = (r[0] or "").strip().lower()
-            raw_code = (r[1] or "").strip() if len(r) > 1 else ""
+            raw_code = (r[code_col] or "").strip() if code_col >= 0 and len(r) > code_col else ""
         code = aliases.get(raw_code, raw_code)
         if met not in ("pv", "uv"):
             continue

@@ -62,6 +62,19 @@ class AfMappingTests(unittest.TestCase):
             self.assertEqual(data[("20260710", "PSBRD1")]["uv"], 3)
             self.assertEqual(totals["20260710"]["uv"], 5)
 
+    def test_mixed_metric_rows_override_a_misleading_uv_filename(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "pSEO_UV.csv"
+            with path.open("w", encoding="utf-8", newline="") as f:
+                writer = csv.writer(f)
+                writer.writerow(["구분", "AF코드", "20260710"])
+                writer.writerow(["PV", "PSBRD1", "7"])
+                writer.writerow(["UV", "PSBRD1", "3"])
+
+            data, _ = build_data.read_perf(path)
+
+            self.assertEqual(data[("20260710", "PSBRD1")], {"pv": 7, "uv": 3})
+
     def test_build_uses_nbos_alias_without_adding_unused_sheet_codes(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
