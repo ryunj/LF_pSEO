@@ -30,6 +30,22 @@ BATCH = 5
 TREND_THRESHOLD = 10.0  # ±10% 이상이면 상승/하락
 
 
+def env(name: str) -> str:
+    """Secrets 값의 앞뒤 공백·줄바꿈 제거"""
+    return os.environ.get(name, "").strip()
+
+
+def check_keys():
+    """키 길이와 앞 2글자만 출력 (전체 값은 출력하지 않음)"""
+    for n in ["NAVER_AD_API_KEY", "NAVER_AD_SECRET", "NAVER_AD_CUSTOMER_ID",
+              "NAVER_CLIENT_ID", "NAVER_CLIENT_SECRET"]:
+        raw = os.environ.get(n, "")
+        v = raw.strip()
+        note = " (앞뒤 공백 제거됨)" if raw != v else ""
+        print(f"[키 확인] {n}: 길이 {len(v)}, 앞 2글자 '{v[:2]}'{note}" if v
+              else f"[키 확인] {n}: 비어 있음 — Secret 이름 확인 필요", flush=True)
+
+
 def norm(s: str) -> str:
     return s.replace(" ", "").upper()
 
@@ -63,12 +79,12 @@ def ad_headers(method, uri):
     ts = str(int(time.time() * 1000))
     msg = f"{ts}.{method}.{uri}"
     sig = base64.b64encode(
-        hmac.new(os.environ["NAVER_AD_SECRET"].encode(), msg.encode(), hashlib.sha256).digest()
+        hmac.new(env("NAVER_AD_SECRET").encode(), msg.encode(), hashlib.sha256).digest()
     ).decode()
     return {
         "X-Timestamp": ts,
-        "X-API-KEY": os.environ["NAVER_AD_API_KEY"],
-        "X-Customer": os.environ["NAVER_AD_CUSTOMER_ID"],
+        "X-API-KEY": env("NAVER_AD_API_KEY"),
+        "X-Customer": env("NAVER_AD_CUSTOMER_ID"),
         "X-Signature": sig,
     }
 
@@ -106,8 +122,8 @@ def fetch_trend(keywords):
     prev_end = this_start - timedelta(days=1)
     prev_start = prev_end.replace(day=1)
     headers = {
-        "X-Naver-Client-Id": os.environ["NAVER_CLIENT_ID"],
-        "X-Naver-Client-Secret": os.environ["NAVER_CLIENT_SECRET"],
+        "X-Naver-Client-Id": env("NAVER_CLIENT_ID"),
+        "X-Naver-Client-Secret": env("NAVER_CLIENT_SECRET"),
         "Content-Type": "application/json",
     }
     result = {}
@@ -151,6 +167,7 @@ def main():
     with open(KEYWORD_FILE, encoding="utf-8") as f:
         keywords = list(dict.fromkeys(l.strip() for l in f if l.strip()))
     print(f"키워드 {len(keywords)}개", flush=True)
+    check_keys()
 
     vol = fetch_volume(keywords)
     trend_error = None
