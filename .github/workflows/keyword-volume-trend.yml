@@ -1,0 +1,29 @@
+name: pSEO 키워드 검색량·트렌드
+
+on:
+  workflow_dispatch:   # Actions 탭에서 'Run workflow' 버튼으로 실행
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install requests pandas openpyxl
+      - name: 검색량·트렌드 조회
+        env:
+          NAVER_AD_API_KEY: ${{ secrets.NAVER_AD_API_KEY }}
+          NAVER_AD_SECRET: ${{ secrets.NAVER_AD_SECRET }}
+          NAVER_AD_CUSTOMER_ID: ${{ secrets.NAVER_AD_CUSTOMER_ID }}
+          NAVER_CLIENT_ID: ${{ secrets.NAVER_CLIENT_ID }}
+          NAVER_CLIENT_SECRET: ${{ secrets.NAVER_CLIENT_SECRET }}
+          TZ: Asia/Seoul
+        run: python keyword_research/keyword_volume_trend.py keyword_research/keywords.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pseo-keyword-result
+          path: output/
+          retention-days: 7
