@@ -121,11 +121,17 @@ def fetch_trend(keywords):
     this_start = end.replace(day=1)
     prev_end = this_start - timedelta(days=1)
     prev_start = prev_end.replace(day=1)
-    headers = {
-        "X-Naver-Client-Id": env("NAVER_CLIENT_ID"),
-        "X-Naver-Client-Secret": env("NAVER_CLIENT_SECRET"),
-        "Content-Type": "application/json",
-    }
+    cid, csec = env("NAVER_CLIENT_ID"), env("NAVER_CLIENT_SECRET")
+    # 2026-07 이후 발급 키는 NAVER API HUB(네이버 클라우드), 이전 키는 개발자센터 → 둘 다 시도
+    endpoints = [
+        ("NAVER API HUB", "https://naverapihub.apigw.ntruss.com/search-trend/v1/search",
+         {"X-NCP-APIGW-API-KEY-ID": cid, "X-NCP-APIGW-API-KEY": csec}),
+        ("네이버 클라우드(구)", "https://naveropenapi.apigw.ntruss.com/datalab/v1/search",
+         {"X-NCP-APIGW-API-KEY-ID": cid, "X-NCP-APIGW-API-KEY": csec}),
+        ("개발자센터", "https://openapi.naver.com/v1/datalab/search",
+         {"X-Naver-Client-Id": cid, "X-Naver-Client-Secret": csec}),
+    ]
+    url = headers = None
     result = {}
     total = (len(keywords) + BATCH - 1) // BATCH
     for i, batch in enumerate(chunks(keywords, BATCH), 1):
@@ -135,8 +141,19 @@ def fetch_trend(keywords):
             "timeUnit": "date",
             "keywordGroups": [{"groupName": k, "keywords": [k]} for k in batch],
         }
-        r = request_with_retry(lambda: requests.post(
-            "https://openapi.naver.com/v1/datalab/search", json=body, headers=headers, timeout=30))
+        if url is None:  # 첫 호출에서 인증되는 엔드포인트를 찾음
+            errors = []
+            for name, u, h in endpoints:
+                h = {**h, "Content-Type": "application/json"}
+                t = requests.post(u, json=body, headers=h, timeout=30)
+                if t.status_code == 200:
+                    url, headers = u, h
+                    print(f"[트렌드] {name} 엔드포인트 사용", flush=True)
+                    break
+                errors.append(f"{name} {t.status_code}: {t.text[:150]}")
+            if url is None:
+                raise RuntimeError(" / ".join(errors))
+        r = request_with_retry(lambda: requests.post(url, json=body, headers=headers, timeout=30))
         by_name = {g["title"]: g["data"] for g in r.json().get("results", [])}
         for k in batch:
             data = by_name.get(k, [])
