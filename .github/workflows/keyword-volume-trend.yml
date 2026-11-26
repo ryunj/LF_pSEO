@@ -23,6 +23,7 @@ jobs:
           TZ: Asia/Seoul
         run: python keyword_research/keyword_volume_trend.py keyword_research/keywords.txt
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: pseo-keyword-result
           path: output/

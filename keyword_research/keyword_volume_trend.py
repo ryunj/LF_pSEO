@@ -153,7 +153,13 @@ def main():
     print(f"키워드 {len(keywords)}개", flush=True)
 
     vol = fetch_volume(keywords)
-    trend, period = fetch_trend(keywords)
+    trend_error = None
+    try:
+        trend, period = fetch_trend(keywords)
+    except Exception as e:  # 트렌드가 실패해도 검색량 결과는 남긴다
+        trend_error = str(e)
+        print("[트렌드 실패]", trend_error, flush=True)
+        trend, period = {k: {} for k in keywords}, f"트렌드 조회 실패: {trend_error[:200]}"
 
     df = pd.DataFrame([{"키워드": k, **vol[k], **trend[k]} for k in keywords])
     os.makedirs("output", exist_ok=True)
@@ -167,6 +173,9 @@ def main():
                    f"이번달 일평균 / 전월 일평균 −1, ±{TREND_THRESHOLD:.0f}% 기준 상승/보합/하락"],
         }).to_excel(w, sheet_name="기준", index=False)
     df.to_csv(OUT_XLSX.replace(".xlsx", ".csv"), index=False, encoding="utf-8-sig")
+    if trend_error:
+        print("검색량만 저장:", OUT_XLSX)
+        sys.exit(1)
     print(df["트렌드"].value_counts().to_string())
     print("완료:", OUT_XLSX)
 
